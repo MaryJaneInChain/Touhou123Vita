@@ -142,6 +142,19 @@ static uint32_t texture_new(uint32_t w, uint32_t h, uint32_t format) {
 /* Texture contents. On the Vita the game keeps ~155 MiB of 32-bit textures alive but
    draws only ~12 MiB of them in the first minute (measured on PC); zlib level 1
    packs all of them in ~16 MiB, so the Vita keeps them deflated and inflates on use. */
+/* How the stored alpha looks, for the 16-bit upload packing (render_gl.c). */
+static uint8_t alpha_kind_of(const RenderTexture *t, const uint8_t *src) {
+    if (t->format == 22) return 1; /* X8R8G8B8 */
+    if (t->format != 21 || t->pitch != t->width * 4) return 0;
+    uint8_t kind = 1;
+    for (size_t i = 3, n = (size_t)t->pitch * t->height; i < n; i += 4) {
+        if (src[i] == 255) continue;
+        if (src[i]) return 0;
+        kind = 2;
+    }
+    return kind;
+}
+
 #ifdef T123_PACKED_TEXTURES
 /* Deflated into 64 KiB pieces, then copied into one block of the exact size. A block
    for the worst case (the raw size, up to 4 MiB) could not be found once texture
@@ -276,6 +289,7 @@ static void *pack_worker(void *arg) {
 
 static void texture_store(RenderTexture *t, const uint8_t *src) {
     static int started;
+    t->alpha_kind = alpha_kind_of(t, src);
     uLong bytes = (uLong)t->pitch * t->height;
     uint8_t *raw = NULL;
     pthread_mutex_lock(&texture_lock);
@@ -326,7 +340,10 @@ static void texture_fetch(RenderTexture *t, uint8_t *dst) {
         memset(dst, 0, (size_t)t->pitch * t->height);
 }
 #else
-static void texture_store(RenderTexture *t, const uint8_t *src) { memcpy(t->data, src, (size_t)t->pitch * t->height); }
+static void texture_store(RenderTexture *t, const uint8_t *src) {
+    t->alpha_kind = alpha_kind_of(t, src);
+    memcpy(t->data, src, (size_t)t->pitch * t->height);
+}
 static void texture_fetch(RenderTexture *t, uint8_t *dst) { memcpy(dst, t->data, (size_t)t->pitch * t->height); }
 #endif
 

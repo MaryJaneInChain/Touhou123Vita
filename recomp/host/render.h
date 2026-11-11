@@ -22,7 +22,8 @@ typedef struct {
     unsigned long long used_frame; /* last frame it was drawn in (GPU budget) */
     uint32_t gpu_bytes;           /* bytes uploaded to the GPU, 0 if not uploaded */
     uint8_t half;                 /* uploaded at half resolution (large backgrounds) */
-    uint8_t gpu16;                /* uploaded as RGBA4444 (half the GPU memory) */
+    uint8_t gpu16;                /* uploaded at 16 bits (half the GPU memory): 1 RGBA4444, 2 RGB565, 3 RGBA5551 */
+    uint8_t alpha_kind;           /* its alpha when stored (d3d9.c): 1 all opaque, 2 only 0 or 255, 0 partial */
 } RenderTexture;
 
 extern unsigned long long texture_parallel_uploads; /* d3d9.c: uploads inflated by worker threads */

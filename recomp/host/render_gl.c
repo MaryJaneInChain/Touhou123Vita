@@ -248,8 +248,8 @@ static int wide_wanted(void) {
 #define FB_H screen_h
 #endif
 
-/* In a fight, a quad covering exactly the game's 640x480 screen (fades, dimming, flashes)
-   is stretched over the whole wide view. Menus keep their centred 640x480. */
+/* A quad covering exactly the game's 640x480 screen (fades, dimming, flashes) is stretched
+   over the whole wide view: untextured ones in every scene, textured ones in a fight. */
 static void widen_fullscreen_quad(float *pos, uint32_t n) {
     float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
     for (uint32_t i = 0; i < n; i++) {
@@ -302,7 +302,7 @@ static void layout_title(const RenderTexture *t, float *pos, uint32_t n) {
         place(pos, n, 1, (x0 + x1) / 2, y1, 320, 504);
     }
 }
-enum { SCENE_SELECT_SCENARIO = 16 };
+enum { SCENE_LOGO = 0, SCENE_SELECT_SCENARIO = 16 };
 /* a layout rule may ask for the draw to be repeated, shifted by these x offsets (e.g. to tile a
    background wider than the game ever drew it) */
 static float layout_copy_dx[2];
@@ -372,10 +372,12 @@ static void layout_scenario(const RenderTexture *t, float *pos, uint32_t n) {
     else if (TEX_IS(t, 216, 32) || TEX_IS(t, 256, 64))
         place(pos, n, 1, 0, 0, -160, 32);                            /* profile line: bottom left */
 }
-/* VS character select (also the netplay ones): the portrait row in the middle grows x1.5 and fills
-   the width (20 x 48) and the extra 64 rows; the 1P half moves up to the top edge, the 2P half down
-   to the bottom; in each, the scrolling pattern tiles to both sides, the banner portrait goes left,
-   the big 1P/2P letters, name plate and profile line go right. Header and help strips as in story mode. */
+/* VS character select (also the netplay ones): the portrait row in the middle grows x1.25 to fill
+   the 160 rows between the two banners (so it does not cover them), 800 wide, centred; its backing
+   strip spans the width. The 1P half moves up to the top
+   edge, the 2P half down to the bottom; in each, the scrolling pattern tiles to both sides, the banner
+   portrait goes left, the big 1P/2P letters, name plate and profile line go right. Header and help
+   strips as in story mode. */
 enum { SCENE_SELECT = 3, SCENE_SELECT_SERVER = 8, SCENE_SELECT_CLIENT = 9 };
 /* The stage select is a panel drawn over the character select in the same scene; it starts with the
    480x480 dark pattern, which the character select never uses, so from there to the end of the frame
@@ -401,24 +403,52 @@ static void layout_stage(const RenderTexture *t, float *pos, uint32_t n) {
     else if (TEX_IS(t, 640, 16))                                     /* help strip */
         place(pos, n, 1.5f, 320, 480, 320, 512);
 }
+/* After a pick, the character's battle sprite (16-bit format 25, a size per character and frame)
+   drops into the left of its half with its aura (128x128) and arrow icon (160x32), and the "Color
+   Select" (12x95, from behind the row) and "Deck Select" (91x12, from off the left edge) labels come
+   in next to it. The group moves right by VS_SPRITE_DX, into the space between the banner portrait's
+   figure and the 1P/2P letters, and with its half (the 2P one 16 less far down, clear of the help
+   strip); the labels by how far in they are, so a parked one stays hidden. */
+enum { VS_SPRITE_DX = 380, VS_SPRITE_DY2 = 16 };
 static void layout_select(const RenderTexture *t, float *pos, uint32_t n) {
     if (TEX_IS(t, 480, 480)) stage_panel = 1;
     if (stage_panel) { layout_stage(t, pos, n); return; }
-    if (!t) return;
     float x0, y0, x1, y1;
     quad_bounds(pos, n, &x0, &y0, &x1, &y1);
-    int top = (y0 + y1) / 2 < 240;
+    float cy = (y0 + y1) / 2;
+    if (!t) return;
+    int top = cy < 240;
     float dy = top ? -32 : 32;
+    float group_dy = top ? -32 : VS_SPRITE_DY2;
+    if (t->format == 25 || TEX_IS(t, 128, 128) || TEX_IS(t, 160, 32)) { /* battle sprite, aura, icon */
+        place(pos, n, 1, 0, 0, VS_SPRITE_DX, group_dy);
+        return;
+    }
+    if (TEX_IS(t, 12, 95)) { /* "Color Select": parked behind the row at y 199..294, shown 144 up / 128 down */
+        float p = cy < 246.5f ? (246.5f - cy) / 144 : (cy - 246.5f) / 128;
+        p = p < 0 ? 0 : p > 1 ? 1 : p;
+        place(pos, n, 1, 0, 0, VS_SPRITE_DX * p, (cy < 246.5f ? -32 : VS_SPRITE_DY2) * p);
+        return;
+    }
+    if (TEX_IS(t, 91, 12)) { /* "Deck Select": parked at x -224 (pushed 160 further, off the screen), shown at 32 */
+        float p = (x0 + 224) / 256;
+        p = p < 0 ? 0 : p > 1 ? 1 : p;
+        place(pos, n, 1, 0, 0, -160 + (VS_SPRITE_DX + 160) * p, group_dy);
+        return;
+    }
     if (TEX_IS(t, 640, 16))                                          /* header / help strip */
         place(pos, n, 1.5f, 320, top ? 0 : 480, 320, top ? -32 : 512);
-    else if (TEX_IS(t, 640, 128) || TEX_IS(t, 32, 128) || TEX_IS(t, 48, 48) || TEX_IS(t, 34, 48) ||
-             TEX_IS(t, 33, 48) || TEX_IS(t, 12, 95))
-        place(pos, n, 1.5f, 320, 176, 320, 144);                     /* portrait row and its cursors */
+    else if (TEX_IS(t, 640, 128))                                    /* portrait row's backing strip */
+        place_xy(pos, n, 1.5f, 1.25f, 320, 176, 320, 160);
+    else if (TEX_IS(t, 32, 128) || TEX_IS(t, 48, 48) || TEX_IS(t, 34, 48) ||
+             TEX_IS(t, 33, 48)) {                                    /* portraits and cursors: x1.25 */
+        place(pos, n, 1.25f, 320, 176, 320, 160);
+    }
     else if (TEX_IS(t, 640, 176)) {                                  /* scrolling pattern, tiled */
         place(pos, n, 1, 0, 0, 0, dy);
         layout_copy_dx[0] = -640; layout_copy_dx[1] = 1280; layout_copies = 2;
-    } else if (TEX_IS(t, 768, 192) || TEX_IS(t, 91, 12))             /* banner portrait: left (and a */
-        place(pos, n, 1, 0, 0, -160, dy);                            /* label parked off its left edge) */
+    } else if (TEX_IS(t, 768, 192))                                  /* banner portrait: left */
+        place(pos, n, 1, 0, 0, -160, dy);
     else if (TEX_IS(t, 137, 142) || TEX_IS(t, 155, 141) || TEX_IS(t, 256, 64) || TEX_IS(t, 216, 32))
         place(pos, n, 1, 0, 0, 160, dy);                             /* 1P/2P, name plate, profile: right */
 }
@@ -454,6 +484,12 @@ static void layout_hud(const RenderTexture *t, float *pos, uint32_t n) {
     /* combo counter (big digits, HIT, Damage/Rate/Limit) under the attacked side's health bar */
     if (cy > 80 && cy < 200 && (TEX_IS(t, 512, 35) || TEX_IS(t, 161, 13) || TEX_IS(t, 27, 15) || TEX_IS(t, 9, 13) ||
                                 TEX_IS(t, 49, 14) || TEX_IS(t, 31, 12) || TEX_IS(t, 29, 12))) {
+        place(pos, n, 1, 0, 0, cx < 320 ? -160 : 160, -32);
+        return;
+    }
+    /* the hit labels listed under the counter ("Smash Attack", "Counter Hit", "Rift Attack":
+       10-pixel-high text, one per line) go with it */
+    if (t && t->height == 10 && y1 - y0 <= 12 && cy > 175 && cy < 245 && (x0 >= 480 || x1 <= 160)) {
         place(pos, n, 1, 0, 0, cx < 320 ? -160 : 160, -32);
         return;
     }
@@ -513,7 +549,7 @@ static void layout_panel(const RenderTexture *t, float *pos, uint32_t n, int fig
 static int scene_is_fight(uint32_t scene) { return scene == 5 || (scene >= 13 && scene <= 15); }
 /* scenes laid out for the whole screen; the others stay clipped to their 640x480 */
 static int scene_is_wide(uint32_t scene) {
-    return scene_is_fight(scene) || scene == SCENE_TITLE || scene == SCENE_SELECT_SCENARIO ||
+    return scene_is_fight(scene) || scene == SCENE_LOGO || scene == SCENE_TITLE || scene == SCENE_SELECT_SCENARIO ||
            scene == SCENE_SELECT || scene == SCENE_SELECT_SERVER || scene == SCENE_SELECT_CLIENT;
 }
 
@@ -966,19 +1002,33 @@ static int tex16_enabled(void) {
     return state;
 }
 
-static uint8_t q4[256];
+static uint8_t q4[256], q5[256], q6[256];
 static uint16_t band16[BAND_BYTES / 4]; /* a band of 32-bit rows holds at most BAND_BYTES/4 pixels */
 static void upload_band_16(void *ctx, const uint8_t *rows, uint32_t y, uint32_t n) {
     RenderTexture *t = ctx;
     uint64_t c0 = platform_ticks_us();
-    if (!q4[255]) for (unsigned i = 0; i < 256; i++) q4[i] = (uint8_t)((i * 15 + 127) / 255);
-    const uint8_t *p = rows;
+    if (!q4[255])
+        for (unsigned i = 0; i < 256; i++) {
+            q4[i] = (uint8_t)((i * 15 + 127) / 255);
+            q5[i] = (uint8_t)((i * 31 + 127) / 255);
+            q6[i] = (uint8_t)((i * 63 + 127) / 255);
+        }
+    const uint8_t *p = rows; /* B G R A */
     uint16_t *o = band16;
     const int opaque = t->format == 22;
-    for (size_t i = 0, count = (size_t)n * t->width; i < count; i++, p += 4)
-        *o++ = (uint16_t)(q4[p[2]] << 12 | q4[p[1]] << 8 | q4[p[0]] << 4 | (opaque ? 15 : q4[p[3]]));
+    size_t count = (size_t)n * t->width;
+    if (t->gpu16 == 2)
+        for (size_t i = 0; i < count; i++, p += 4) *o++ = (uint16_t)(q5[p[2]] << 11 | q6[p[1]] << 5 | q5[p[0]]);
+    else if (t->gpu16 == 3)
+        for (size_t i = 0; i < count; i++, p += 4)
+            *o++ = (uint16_t)(q5[p[2]] << 11 | q5[p[1]] << 6 | q5[p[0]] << 1 | (opaque || p[3] >= 128));
+    else
+        for (size_t i = 0; i < count; i++, p += 4)
+            *o++ = (uint16_t)(q4[p[2]] << 12 | q4[p[1]] << 8 | q4[p[0]] << 4 | (opaque ? 15 : q4[p[3]]));
     uint64_t c1 = platform_ticks_us();
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, (GLint)y, (GLsizei)t->width, (GLsizei)n, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4, band16);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, (GLint)y, (GLsizei)t->width, (GLsizei)n, t->gpu16 == 2 ? GL_RGB : GL_RGBA,
+                    t->gpu16 == 2 ? GL_UNSIGNED_SHORT_5_6_5 : t->gpu16 == 3 ? GL_UNSIGNED_SHORT_5_5_5_1 : GL_UNSIGNED_SHORT_4_4_4_4,
+                    band16);
     up_stats.conv += c1 - c0; up_stats.gl += platform_ticks_us() - c1;
 }
 
@@ -1016,7 +1066,12 @@ static void upload(RenderTexture *t) {
     uint32_t gw = half ? t->width / 2 : t->width, gh = half ? (t->height + 1) / 2 : t->height;
     int use16 = !half && (t->format == 21 || t->format == 22) && t->pitch == t->width * 4 &&
                 (uint64_t)t->width * t->height >= 256 * 256 && tex16_enabled();
-    GLenum gtype = use16 ? GL_UNSIGNED_SHORT_4_4_4_4 : GL_UNSIGNED_BYTE;
+    /* the 16-bit packing by the contents' alpha: opaque ones get 5-6-5 bits of colour (the title's
+       sky showed bands at 4 bits on the Vita), on/off alpha 5-5-5-1, partial alpha 4-4-4-4 */
+    int kind16 = !use16 ? 0 : t->format == 22 || t->alpha_kind == 1 ? 2 : t->alpha_kind == 2 ? 3 : 1;
+    GLenum gformat = kind16 == 2 ? GL_RGB : GL_RGBA;
+    GLenum gtype = kind16 == 2 ? GL_UNSIGNED_SHORT_5_6_5 : kind16 == 3 ? GL_UNSIGNED_SHORT_5_5_5_1
+                 : kind16 ? GL_UNSIGNED_SHORT_4_4_4_4 : GL_UNSIGNED_BYTE;
     size_t out_bytes = (size_t)gw * gh * (use16 ? 2 : 4);
     if (t->format < 64) {
         fmt_census[t->format].n++;
@@ -1039,7 +1094,7 @@ static void upload(RenderTexture *t) {
        pointer (a crash in write_rgba8888 in Story mode): evict and retry, and if there
        is still no room leave the texture empty for this frame. */
     while (glGetError()) {}
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)gw, (GLsizei)gh, 0, GL_RGBA, gtype, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, gformat, (GLsizei)gw, (GLsizei)gh, 0, gformat, gtype, NULL);
     for (unsigned attempt = 0; glGetError() != GL_NO_ERROR; attempt++) {
         RenderTexture *oldest = NULL;
         for (unsigned i = 1; i < RENDER_MAX_TEXTURES; i++) {
@@ -1055,7 +1110,7 @@ static void upload(RenderTexture *t) {
         }
         gpu_forget(oldest);
         glBindTexture(GL_TEXTURE_2D, t->gl);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)gw, (GLsizei)gh, 0, GL_RGBA, gtype, NULL);
+        glTexImage2D(GL_TEXTURE_2D, 0, gformat, (GLsizei)gw, (GLsizei)gh, 0, gformat, gtype, NULL);
     }
     /* band rows: bounded by both buffers (16-bit formats widen to 4 bytes per pixel);
        even, so a half-resolution band starts on a whole output row */
@@ -1063,7 +1118,7 @@ static void upload(RenderTexture *t) {
     size_t rows = BAND_BYTES / t->pitch, rgba_rows = sizeof band_rgba / ((size_t)t->width * 4);
     if (rgba_rows < rows) rows = rgba_rows;
     if (rows > 1) rows &= ~(size_t)1;
-    t->gpu16 = (uint8_t)use16;
+    t->gpu16 = (uint8_t)kind16;
     render_texture_rows(t, band, rows * t->pitch, half ? upload_band_half : use16 ? upload_band_16 : upload_band, t);
     uint64_t t3 = platform_ticks_us();
     up_stats.n++; up_stats.total += t3 - t0; up_stats.room += t1 - t0; up_stats.alloc += t2 - t1; up_stats.fill += t3 - t2;
@@ -1156,12 +1211,18 @@ void render_draw_up(uint32_t type, uint32_t count, uint32_t data, uint32_t strid
     layout_split = 0;
     if (wide_view && rhw && n >= 4 && n <= 6) {
         uint32_t scene = rd32(0x8A0044); /* SokuLib ADDR_SCENE_ID */
+        /* fades and dimming: an untextured quad over the whole 640x480 covers the whole screen in
+           every scene (textured ones there are backgrounds, laid out per scene; in a fight every
+           such quad is stretched, below). Scenes kept at 4:3 clip it anyway. */
+        if (tex == 0xFFFFFFFFu || !bound) widen_fullscreen_quad(pos, n);
         if (scene_is_fight(scene)) {
             const RenderTexture *b = tex != 0xFFFFFFFFu ? bound : NULL;
             if (TEX_IS(b, 480, 480)) pause_panel = 1;
             if (pause_panel) layout_panel(b, pos, n, 1);
             else { widen_fullscreen_quad(pos, n); layout_hud(b, pos, n); }
         }
+        else if (scene == SCENE_LOGO && tex != 0xFFFFFFFFu && TEX_IS(bound, 640, 480))
+            place(pos, n, 1.5f, 320, 240, 320, 240); /* "Touhou Project" splash: the full width, cropped top and bottom */
         else if (scene == SCENE_TITLE) {
             const RenderTexture *b = tex != 0xFFFFFFFFu ? bound : NULL;
             if (TEX_IS(b, 480, 480)) pause_panel = 1;
