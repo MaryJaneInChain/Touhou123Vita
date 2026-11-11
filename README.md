@@ -2,7 +2,7 @@
 **ULTRA IA VIBECODED!**
 **Touhou 12.3: Hisoutensoku for PS Vita / para PS Vita** · Static recompilation / Recompilación estática (x86 → C → ARM).
 
-[Español](#español) · [English](#english) · [Download VPK / Descargar VPK](https://github.com/Botarguirix/Touhou123Vita/releases/tag/v0.1.1-alpha)
+[Español](#español) · [English](#english) · [简体中文（汉化 + 宽屏 fork）](README.zh-CN.md) · [Download VPK / Descargar VPK](https://github.com/Botarguirix/Touhou123Vita/releases/tag/v0.1.1-alpha)
 
 ![PS Vita control map / Mapa de controles de PS Vita](docs/img/psvita-controls.png)
 
