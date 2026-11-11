@@ -84,6 +84,38 @@ static long cb_tell(void *source) {
 
 static void ret_eax(Cpu *c, uint32_t v) { c->eax.d = v; c->esp.d += 4; }
 
+/* The decoder runs in the host's default floating-point mode, whatever the guest thread left:
+   - Rounding: the runtime leaves each thread's host FPU in the guest's last x87 rounding mode
+     (guest.c, WITH_RC), and the game's CRT switches to directed modes (truncation for its
+     float->int). libvorbis in such a mode decodes its short blocks (the transients) to
+     noise and its long blocks off by one: heard on the Vita as loud noise in the music from
+     the title screen on. Measured on PC (title music, 60 s): with round-to-nearest around
+     open, read and seek the mix matches a plain libvorbis decode (before: 6% of it noise,
+     up to +44 dB above 10 kHz).
+   - Denormals (Vita): the tail of a track or a fade produces denormal values (a core dump
+     showed the music thread dying on a VFP `vmul.f32` inside ov_read's float-to-16-bit loop);
+     with flush-to-zero they read as zero (inaudible) and the unit does not trap on them.
+   The guest's mode is restored after each call, so its own arithmetic keeps its behaviour. */
+#ifdef __vita__
+static inline uint32_t fp_enter(void) {
+    uint32_t old;
+    __asm__ volatile("vmrs %0, fpscr" : "=r"(old));
+    __asm__ volatile("vmsr fpscr, %0" : : "r"((old & ~(3u << 22)) | (1u << 24))); /* RMode nearest, FZ */
+    return old;
+}
+static inline void fp_leave(uint32_t old) { __asm__ volatile("vmsr fpscr, %0" : : "r"(old)); }
+#else
+#include <fenv.h>
+static inline uint32_t fp_enter(void) {
+    int old = fegetround();
+    if (old != FE_TONEAREST) fesetround(FE_TONEAREST);
+    return (uint32_t)old;
+}
+static inline void fp_leave(uint32_t old) {
+    if ((int)old != FE_TONEAREST) fesetround((int)old);
+}
+#endif
+
 static void native_open(Cpu *c) {
     uint32_t datasource = arg(c, 0), vf = arg(c, 1), initial = arg(c, 2), ibytes = arg(c, 3);
     Stream *s = find_stream(vf);
@@ -99,7 +131,9 @@ static void native_open(Cpu *c) {
     if (!s->info) s->info = heap_alloc(32, 1);
     s->cpu = c;
     ov_callbacks cb = {cb_read, s->seek ? cb_seek : NULL, cb_close, s->tell ? cb_tell : NULL};
+    uint32_t fp = fp_enter();
     int r = ov_open_callbacks(s, &s->file, initial ? (const char *)G(initial) : NULL, (long)ibytes, cb);
+    fp_leave(fp);
     if (r < 0) {
         trace("# vorbis: ov_open_callbacks(%08x) failed %d", vf, r);
         s->vf = 0;
@@ -133,25 +167,6 @@ static void native_info(Cpu *c) {
     ret_eax(c, s->info);
 }
 
-/* libvorbis works in float, and the tail of a track or a fade produces denormal values
-   (a core dump from the Vita showed the music thread dying on a VFP `vmul.f32` inside
-   ov_read's float-to-16-bit loop, right after leaving the profile screen). With
-   flush-to-zero set, denormals read as zero (inaudible in music) and the unit does not
-   have to handle them. It is set only around the decoder calls: the guest's own double
-   arithmetic keeps its exact behaviour. */
-#ifdef __vita__
-static inline uint32_t fz_enter(void) {
-    uint32_t old;
-    __asm__ volatile("vmrs %0, fpscr" : "=r"(old));
-    __asm__ volatile("vmsr fpscr, %0" : : "r"(old | (1u << 24)));
-    return old;
-}
-static inline void fz_leave(uint32_t old) { __asm__ volatile("vmsr fpscr, %0" : : "r"(old)); }
-#else
-static inline uint32_t fz_enter(void) { return 0; }
-static inline void fz_leave(uint32_t old) { (void)old; }
-#endif
-
 static void native_read(Cpu *c) {
     Stream *s = find_stream(arg(c, 0));
     if (!s) { ret_eax(c, (uint32_t)OV_EINVAL); return; }
@@ -166,10 +181,10 @@ static void native_read(Cpu *c) {
     }
     int bitstream = 0;
     uint64_t t0 = platform_ticks_us();
-    uint32_t fp = fz_enter();
+    uint32_t fp = fp_enter();
     long r = ov_read(&s->file, (char *)G(arg(c, 1)), (int)arg(c, 2), (int)arg(c, 3), (int)arg(c, 4),
                      (int)arg(c, 5), &bitstream);
-    fz_leave(fp);
+    fp_leave(fp);
     decode_us += platform_ticks_us() - t0;
     if (r > 0) decoded_bytes += (uint64_t)r;
     if (arg(c, 6)) wr32(arg(c, 6), (uint32_t)bitstream);
@@ -202,9 +217,9 @@ static void native_time_seek(Cpu *c) {
         ret_eax(c, 0);
         return;
     }
-    uint32_t fp = fz_enter();
+    uint32_t fp = fp_enter();
     int seek_result = ov_time_seek(&s->file, t);
-    fz_leave(fp);
+    fp_leave(fp);
     ret_eax(c, (uint32_t)seek_result);
 }
 
