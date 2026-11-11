@@ -19,6 +19,7 @@
 uint8_t *guest_base;
 uint32_t guest_image_base, guest_image_size;
 int guest_mem_error;
+int t123_wide;
 
 /* -- memory ---------------------------------------------------------------------------- */
 int guest_mem_init(void) {

@@ -18,6 +18,8 @@ uint64_t platform_ticks_us(void) {
 
 void platform_finish(const char *summary) { printf("%s\n", summary); }
 
+int platform_split_cores(void) { return 0; }
+void platform_pin_helper(const char *what) { (void)what; }
 void platform_sleep_ms(uint32_t ms) {
     struct timespec ts = {ms / 1000, (long)(ms % 1000) * 1000000L};
     nanosleep(&ts, NULL);

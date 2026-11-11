@@ -11,8 +11,10 @@ runtime and a stub main, which proves the program is complete C.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -44,6 +46,74 @@ int main(void) {
     return 0;
 }
 """
+
+
+# The 汉化 (Chinese) build of the game changes one byte of the glyph routine at 0x412910:
+# "cmp al, 0xa0" -> "cmp al, 0xff", so every byte 0x81-0xFE starts a two-byte (GBK) character
+# instead of only the Shift-JIS lead bytes. The other eight Shift-JIS checks stay as in that build.
+GBK_PATCHES = {0x4129BB: (0xA0, 0xFF)}
+
+
+# Wide 960x544 fight view (--wide; on when the host sets t123_wide). The game keeps drawing in its
+# 640x480 coordinates and the host shows -160..800 x -32..512 of them, so the HUD and menus stay
+# centred; only the camera's view and the background layers' culling are widened symmetrically
+# (screen centre 320 and ground line 420 stay). Each entry: the instruction whose screen-size
+# constant changes, and the value it uses in wide mode.
+WIDE_L, WIDE_R, WIDE_B = -160.0, 800.0, 512.0
+WIDE_PATCHES = [
+    (0x428E85, 960.0),   # camera target: max(players' distance + 80, 640) -> 960
+    (0x428EEB, 960.0),   #   zoom = 640 / distance -> 960 / distance
+    (0x428F02, 0.75),    #   min zoom 0.5 -> 0.75 (960 / 1280: never wider than the stage)
+    (0x428F38, 800.0),   #   centre x <= 960 -> 800 (1280 - 480)
+    (0x428F45, 800.0),
+    (0x4290C8, 0.75),    # camera update: min zoom
+    (0x429144, 960.0),   #   centre x clamp: half view = 640 / zoom / 2
+    (0x4293C0, WIDE_R),  #   right edge = 640 / zoom - translate.x
+    (0x4293D3, WIDE_B),  #   bottom edge = 480 / zoom - translate.y
+    # background layers: culling "0 < right && left < 640 && 0 < bottom && top < 480"
+    (0x46F44F, WIDE_L), (0x46F45E, WIDE_R), (0x46F484, WIDE_B),
+    (0x473719, WIDE_L), (0x473728, WIDE_R), (0x47374E, WIDE_B),
+    (0x4740AC, WIDE_L), (0x4740BB, WIDE_R), (0x4740EC, WIDE_B),
+    (0x47419E, WIDE_L), (0x4741AD, WIDE_R), (0x4741DE, WIDE_B),
+    # background tiling loops: run to the right / bottom edge
+    (0x475958, WIDE_R), (0x476478, WIDE_R), (0x476F18, WIDE_R), (0x477010, WIDE_R), (0x4779AE, WIDE_R),
+    (0x476FED, WIDE_B), (0x47798B, WIDE_B),
+]
+_LOAD = re.compile(r"x87_fld_(m32|m64)\(c, (\(uint32_t\)\(0x[0-9a-f]+u\))\)|x87_(m32|m64)\((\(uint32_t\)\(0x[0-9a-f]+u\))\)"
+                   r"|x87_fld_const\(c, 0\)")
+
+
+def apply_wide(files: dict[str, str]) -> None:
+    for va, value in WIDE_PATCHES:
+        label = f"L_{va:08x}:"
+        name = next((n for n, text in files.items() if label in text), None)
+        if name is None:
+            raise SystemExit(f"wide patch {va:#x}: instruction not lifted")
+        text = files[name]
+        start = text.index("\n", text.index(label)) + 1
+        end = text.index("\n", start)
+        lit = f"(x87_t){value!r}"
+
+        def swap(m: re.Match) -> str:
+            if m.group(1):
+                return f"x87_push(c, t123_wide ? {lit} : x87_{m.group(1)}({m.group(2)}))"
+            if m.group(3):
+                return f"(t123_wide ? {lit} : x87_{m.group(3)}({m.group(4)}))"
+            return f"x87_push(c, t123_wide ? {lit} : (x87_t)0.0)"
+        line, n = _LOAD.subn(swap, text[start:end])
+        if n != 1:
+            raise SystemExit(f"wide patch {va:#x}: expected one constant load in {text[start:end].strip()!r}")
+        files[name] = text[:start] + line + text[end:]
+
+
+def apply_patches(image: Image, patches: dict[int, tuple[int, int]]) -> None:
+    for va, (old, new) in patches.items():
+        s = image.section_at(va)
+        i = va - s.start
+        if s.data[i] != old:
+            raise SystemExit(f"patch {va:#x}: expected {old:#04x}, found {s.data[i]:#04x}")
+        image.sections[image.sections.index(s)] = dataclasses.replace(
+            s, data=s.data[:i] + bytes([new]) + s.data[i + 1:])
 
 
 def region(va: int) -> str:
@@ -92,9 +162,15 @@ def main() -> None:
     parser.add_argument("--compile-only", action="store_true",
                         help="build the existing gen/ output without lifting again")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
+    parser.add_argument("--gbk", action="store_true",
+                        help="lift with the Chinese (汉化) build's GBK glyph patch; pair with build_vita.py --gbk")
+    parser.add_argument("--wide", action="store_true",
+                        help="wide 960x544 fight view, switched on by the host's t123_wide; pair with build_vita.py --wide")
     args = parser.parse_args()
 
     image = Image.from_pe(args.exe)
+    if args.gbk:
+        apply_patches(image, GBK_PATCHES)
     report = ROOT / "artifacts/recomp" / image.sha256 / "discovery.json"
     if not report.exists():
         raise SystemExit("run recomp/discover.py first")
@@ -111,6 +187,8 @@ def main() -> None:
     lifter = Lifter(Discovery(image), set(entries))
     files, result = lifter.lift_units(
         entries, progress=lambda i, n: print(f"  lifting {i}/{n}", flush=True))
+    if args.wide:
+        apply_wide(files)
     # unchanged units keep their mtime, so the builds recompile only what changed
     # (a full -O2 Vita build is ~70 min)
     for old in gen.glob("unit_*.c"):

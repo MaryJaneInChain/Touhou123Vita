@@ -18,7 +18,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-GCC = Path(r"C:\msys64\ucrt64\bin\gcc.exe")
+GCC = Path(r"C:\msys64\ucrt64\bin\gcc.exe") if os.name == "nt" else Path("gcc")
+LINUX_LIBS = ["-lSDL2", "-lGL", "-lfreetype", "-lpng", "-lvorbisfile", "-lvorbis", "-logg", "-lz", "-lm", "-lpthread"]
 SHA = "f0db93660ceb8635a1921e0ba4686fcfbd5c492311dee6ef7061b7bada16731e"
 RUNTIME = ROOT / "recomp/runtime"
 HOST = ROOT / "recomp/host"
@@ -49,7 +50,11 @@ def build(jobs: int, packed: bool = False) -> Path:
                  "-DT123_TRACE_CALLS", f"-I{RUNTIME}", f"-I{gen}"]
     host_flags = ["-std=gnu11", "-O1", "-g", "-frounding-math", "-Wall", "-Wextra",
                   "-Wno-unused-parameter", f"-I{RUNTIME}", f"-I{HOST}",
-                  "-IC:/msys64/ucrt64/include/freetype2"]  # glyph.c (Codex T8)
+                  "-IC:/msys64/ucrt64/include/freetype2" if os.name == "nt" else "-I/usr/include/freetype2"]  # glyph.c (Codex T8)
+    if os.environ.get("T123_GBK"):
+        host_flags.append("-DT123_GBK")  # Chinese (汉化) data: GBK code page and font
+    if os.environ.get("T123_WIDE"):
+        host_flags.append("-DT123_WIDE_LIFT")  # code lifted with lift_all.py --wide
     if packed:
         host_flags.append("-DT123_PACKED_TEXTURES")
     tasks = [(src, gen / (src.stem + ".o"), gen_flags, header + [gen / "lifted.h"])
@@ -61,6 +66,12 @@ def build(jobs: int, packed: bool = False) -> Path:
     if errors:
         raise SystemExit("\n".join(errors))
     exe = out / "th123_host.exe"
+    if os.name != "nt":
+        link = subprocess.run([str(GCC), *[str(t[1]) for t in tasks], *LINUX_LIBS, "-o", str(exe)],
+                              capture_output=True, text=True)
+        if link.returncode:
+            raise SystemExit(link.stderr)
+        return exe
     link = subprocess.run([str(GCC), *[str(t[1]) for t in tasks], "-static", "-lSDL2", "-lopengl32", "-lsetupapi", "-limm32", "-lversion", "-lwinmm", "-lole32", "-loleaut32", "-lgdi32", "-luuid", "-luser32", "-ladvapi32", "-lshell32", "-lcfgmgr32",
                            "-lfreetype", "-lbz2", "-lpng16", "-lharfbuzz", "-lusp10", "-lrpcrt4", "-ldwrite", "-lglib-2.0", "-lintl", "-lws2_32", "-lshlwapi", "-latomic", "-lpcre2-8", "-lgraphite2", "-lbrotlidec", "-lbrotlicommon", "-lfreetype", "-lstdc++", "-lgdi32", "-lole32", "-luser32", "-luuid",
                            "-lvorbisfile", "-lvorbis", "-logg", "-lz", "-lm", "-lpthread", "-o", str(exe)],

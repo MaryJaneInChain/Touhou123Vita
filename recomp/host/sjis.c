@@ -1,7 +1,35 @@
 #include "sjis.h"
-#include "sjis_table.h"
 #include <limits.h>
 
+#ifdef T123_GBK
+/* Chinese build: the game's text (the 汉化 data) is CP936/GBK, so the "ANSI code page"
+   these conversions stand for is 936 instead of 932 (kernel32.c reports the same). */
+#include "gbk_table.h"
+static int lead(uint8_t b) { return b >= 0x81 && b <= 0xfe; }
+static uint16_t single(uint8_t b) {
+    if (b < 0x80) return b;
+    return b == 0x80 ? 0x20ac : 0x30fb;
+}
+static uint16_t pair(uint8_t a, uint8_t b) {
+    if (b < 0x40 || b == 0x7f || b == 0xff) return 0x30fb;
+    uint16_t u = gbk_decode[(a - 0x81u) * 191u + (b - 0x40u)];
+    return u ? u : 0x30fb;
+}
+static uint16_t encode(uint16_t u, int *fallback) {
+    if (u < 0x80) return u;
+    if (u == 0x20ac) return 0x80;
+    size_t lo = 0, hi = sizeof gbk_encode / sizeof gbk_encode[0];
+    while (lo < hi) {
+        size_t mid = lo + (hi-lo)/2;
+        if (gbk_encode[mid].unicode < u) lo = mid+1; else hi = mid;
+    }
+    if (lo < sizeof gbk_encode / sizeof gbk_encode[0] && gbk_encode[lo].unicode == u)
+        return gbk_encode[lo].bytes;
+    *fallback = 1;
+    return '?';
+}
+#else
+#include "sjis_table.h"
 static int lead(uint8_t b) {
     return (b >= 0x81 && b <= 0x9f) || (b >= 0xe0 && b <= 0xfc);
 }
@@ -34,6 +62,7 @@ static uint16_t encode(uint16_t u, int *fallback) {
     *fallback = 1;
     return '?';
 }
+#endif
 int sjis_to_utf16(const uint8_t *in, int in_len, uint16_t *out, int out_len) {
     if (!in || !in_len || out_len < 0) return 0;
     if (in_len < 0) {

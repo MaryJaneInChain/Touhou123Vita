@@ -51,6 +51,8 @@ extern char trace_path[256];
 void platform_log(const char *line);   /* mirrors trace lines (Vita: on-screen log) */
 uint64_t platform_ticks_us(void);      /* monotonic microseconds */
 void platform_sleep_ms(uint32_t ms);
+int platform_split_cores(void);       /* Vita, cores.txt: the game thread has user core 1 to itself */
+void platform_pin_helper(const char *what); /* with cores.txt: keep the calling thread on cores 0 and 2 */
 /* Texture storage: zeroed calloc on PC (unpacked textures start blank), an unzeroed
    pool (user RAM + CDRAM chunks) on the Vita, whose callers overwrite every byte. */
 void *platform_texture_alloc(size_t bytes);

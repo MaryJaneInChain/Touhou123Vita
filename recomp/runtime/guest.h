@@ -99,6 +99,9 @@ extern int guest_mem_error; /* platform error code when guest_mem_init fails */
 int guest_map(uint32_t address, uint32_t size);
 int guest_load_pe(const char *path); /* copies headers and sections at ImageBase */
 extern uint32_t guest_image_base, guest_image_size;
+/* Set by the host before the game starts: 1 = wide 960x544 fight view. Only code lifted with
+   recomp/lift_all.py --wide reads it; elsewhere it changes nothing. */
+extern int t123_wide;
 
 static inline uint8_t rd8(uint32_t a) { return *G(a); }
 static inline uint16_t rd16(uint32_t a) { uint16_t v; memcpy(&v, G(a), 2); return v; }

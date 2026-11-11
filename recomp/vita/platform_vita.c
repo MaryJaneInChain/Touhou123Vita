@@ -150,6 +150,24 @@ uint64_t platform_ticks_us(void) { return sceKernelGetProcessTimeWide(); }
 
 void platform_sleep_ms(uint32_t ms) { sceKernelDelayThread(ms * 1000u); }
 
+/* cores.txt in the data directory: the game thread (logic + drawing) alone on user core 1,
+   every other thread (the game's own, the host's helpers and the main thread) on cores 0 and
+   2, so nothing preempts it there (threads.c pins the game's threads). */
+int platform_split_cores(void) {
+    static int on = -1;
+    if (on < 0) {
+        FILE *f = fopen("ux0:data/touhou123vita/cores.txt", "rb");
+        on = f != NULL;
+        if (f) fclose(f);
+    }
+    return on;
+}
+void platform_pin_helper(const char *what) {
+    if (!platform_split_cores()) return;
+    int r = sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), 0x10000 | 0x40000); /* USER_0 | USER_2 */
+    trace("# thread %s: cores 0+2 (%08x)", what, (unsigned)r);
+}
+
 void platform_log(const char *line) {
     if (!strncmp(line, "#   ", 4) || !strncmp(line, "GetProcAddress", 14) || !strncmp(line, "GetModuleHandleA", 16))
         return; /* per-call detail stays in the trace file; the screen shows milestones */

@@ -146,36 +146,82 @@ static uint32_t texture_new(uint32_t w, uint32_t h, uint32_t format) {
 /* Deflated into 64 KiB pieces, then copied into one block of the exact size. A block
    for the worst case (the raw size, up to 4 MiB) could not be found once texture
    storage was fragmented ("cannot store texture" in long sessions on the Vita), while
-   the result is typically a tenth of it. */
-enum { PIECE = 64 * 1024, MAX_PIECES = 80 };
-static uint8_t *deflate_texture(const uint8_t *src, uLong bytes, uLongf *zlen) {
+   the result is typically a tenth of it.
+   Layout: a PackHeader, then raw deflate data (no zlib wrapper) ended with Z_FULL_FLUSH
+   every `rows` rows (~64 KiB), so every segment can be inflated on its own: uploading a
+   large texture spreads its segments over worker threads (render_texture_rows). On the
+   Vita inflating was 71% of the upload time and a 256x256-or-larger texture took ~27 ms,
+   more than a frame. A sequential inflate reads straight through the flush points. */
+enum { PIECE = 64 * 1024, MAX_PIECES = 80, SEGMENT_BYTES = 64 * 1024, PACK_MAGIC = 0x47455331 /* "1SEG" */ };
+typedef struct { uint32_t magic, segments, rows, offset[]; } PackHeader; /* offset[segments + 1], into the data after the header */
+static uint32_t pack_header_bytes(uint32_t segments) { return (uint32_t)sizeof(PackHeader) + 4 * (segments + 1); }
+
+static uint8_t *deflate_texture(const uint8_t *src, uint32_t pitch, uint32_t height, uLongf *zlen) {
+    uint32_t rows = SEGMENT_BYTES / pitch;
+    rows = rows < 2 ? 2 : rows & ~1u; /* even: half-resolution uploads average row pairs */
+    uint32_t segments = (height + rows - 1) / rows;
+    uint32_t *offset = malloc(4 * (segments + 1));
     uint8_t *pieces[MAX_PIECES];
     unsigned count = 0;
     z_stream z;
     memset(&z, 0, sizeof z);
     *zlen = 0;
-    if (deflateInit(&z, 1) != Z_OK)
+    if (!offset || deflateInit2(&z, 1, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        free(offset);
         return NULL;
-    z.next_in = (Bytef *)src;
-    z.avail_in = (uInt)bytes;
-    int r = Z_OK;
-    while (r == Z_OK && count < MAX_PIECES && (pieces[count] = malloc(PIECE))) {
-        z.next_out = pieces[count++];
-        z.avail_out = PIECE;
-        r = deflate(&z, Z_FINISH);
     }
-    uint8_t *packed = NULL;
-    if (r == Z_STREAM_END && (packed = platform_texture_alloc(z.total_out))) {
-        for (unsigned k = 0; k < count; k++) {
-            uLong at = (uLong)k * PIECE, n = z.total_out - at < PIECE ? z.total_out - at : PIECE;
-            memcpy(packed + at, pieces[k], n);
+    int r = Z_OK, ok = 1;
+    for (uint32_t seg = 0; seg < segments && ok; seg++) {
+        uint32_t y = seg * rows, n = height - y < rows ? height - y : rows;
+        int flush = seg + 1 == segments ? Z_FINISH : Z_FULL_FLUSH;
+        offset[seg] = (uint32_t)z.total_out;
+        z.next_in = (Bytef *)src + (size_t)y * pitch;
+        z.avail_in = (uInt)((size_t)n * pitch);
+        for (;;) {
+            if (!z.avail_out) {
+                if (count == MAX_PIECES || !(pieces[count] = malloc(PIECE))) { ok = 0; break; }
+                z.next_out = pieces[count++];
+                z.avail_out = PIECE;
+            }
+            r = deflate(&z, flush);
+            if (r == Z_STREAM_END || (flush == Z_FULL_FLUSH && !z.avail_in && z.avail_out)) break;
+            if (r != Z_OK && r != Z_BUF_ERROR) { ok = 0; break; }
         }
     }
-    *zlen = z.total_out;
+    offset[segments] = (uint32_t)z.total_out;
+    uint32_t head = pack_header_bytes(segments);
+    uint8_t *packed = NULL;
+    if (ok && r == Z_STREAM_END && (packed = platform_texture_alloc(head + z.total_out))) {
+        PackHeader *h = (PackHeader *)packed;
+        h->magic = PACK_MAGIC;
+        h->segments = segments;
+        h->rows = rows;
+        memcpy(h->offset, offset, 4 * (segments + 1));
+        for (unsigned k = 0; k < count; k++) {
+            uLong at = (uLong)k * PIECE, n = z.total_out - at < PIECE ? z.total_out - at : PIECE;
+            memcpy(packed + head + at, pieces[k], n);
+        }
+    }
+    *zlen = head + z.total_out;
     deflateEnd(&z);
     for (unsigned k = 0; k < count; k++)
         free(pieces[k]);
+    free(offset);
     return packed;
+}
+/* Inflates `len` bytes of raw deflate data into exactly `out` bytes; 0 on success. */
+static int inflate_raw(const uint8_t *src, uint32_t len, uint8_t *dst, uint32_t out) {
+    z_stream z;
+    memset(&z, 0, sizeof z);
+    if (inflateInit2(&z, -MAX_WBITS) != Z_OK) return -1;
+    z.next_in = (Bytef *)src;
+    z.avail_in = len;
+    z.next_out = dst;
+    z.avail_out = out;
+    int r = Z_OK;
+    while (z.avail_out && r == Z_OK) r = inflate(&z, Z_SYNC_FLUSH);
+    inflateEnd(&z);
+    return z.avail_out ? -1 : 0;
 }
 /* Under texture_lock: replace the stored pixels of t. */
 static void install_packed(RenderTexture *t, uint8_t *packed, uLongf zlen, uint32_t w, uint32_t h) {
@@ -202,6 +248,7 @@ static pthread_cond_t job_ready = PTHREAD_COND_INITIALIZER;
 
 static void *pack_worker(void *arg) {
     (void)arg;
+    platform_pin_helper("texture packer");
     for (;;) {
         pthread_mutex_lock(&texture_lock);
         while (job_head == job_tail)
@@ -209,10 +256,10 @@ static void *pack_worker(void *arg) {
         PackJob job = jobs[job_head++ % MAX_JOBS];
         RenderTexture *t = &textures[job.index];
         int current = t->gen == job.gen;
-        uint32_t w = t->width, h = t->height;
+        uint32_t w = t->width, h = t->height, pitch = t->pitch;
         pthread_mutex_unlock(&texture_lock);
         uLongf zlen = 0;
-        uint8_t *packed = current ? deflate_texture(job.raw, job.bytes, &zlen) : NULL;
+        uint8_t *packed = current ? deflate_texture(job.raw, pitch, h, &zlen) : NULL;
         pthread_mutex_lock(&texture_lock);
         if (current && t->gen == job.gen) {
             install_packed(t, packed, zlen, w, h);
@@ -260,7 +307,7 @@ static void texture_store(RenderTexture *t, const uint8_t *src) {
     uint32_t gen = t->gen;
     pthread_mutex_unlock(&texture_lock);
     uLongf zlen = 0;
-    uint8_t *packed = deflate_texture(src, bytes, &zlen);
+    uint8_t *packed = deflate_texture(src, t->pitch, t->height, &zlen);
     pthread_mutex_lock(&texture_lock);
     if (t->gen == gen)
         install_packed(t, packed, zlen, t->width, t->height);
@@ -273,7 +320,9 @@ static void texture_fetch(RenderTexture *t, uint8_t *dst) {
     uLongf bytes = (uLongf)t->pitch * t->height;
     if (t->raw)
         memcpy(dst, t->raw, bytes); /* compression still pending: the job's copy is current */
-    else if (!t->data || uncompress(dst, &bytes, t->data, (uLong)t->stored) != Z_OK)
+    else if (!t->data || ((PackHeader *)t->data)->magic != PACK_MAGIC ||
+             inflate_raw(t->data + pack_header_bytes(((PackHeader *)t->data)->segments),
+                         (uint32_t)(t->stored - pack_header_bytes(((PackHeader *)t->data)->segments)), dst, (uint32_t)bytes))
         memset(dst, 0, (size_t)t->pitch * t->height);
 }
 #else
@@ -287,6 +336,81 @@ void render_texture_pixels(RenderTexture *t, uint8_t *out) {
     pthread_mutex_unlock(&texture_lock);
 }
 
+unsigned long long texture_parallel_uploads; /* uploads inflated by the segment workers (render.h) */
+#ifdef T123_PACKED_TEXTURES
+/* Parallel inflate of a segmented texture: two worker threads inflate the next segments into
+   a ring of buffers while the caller converts and uploads the ones done, in order. Used by one
+   upload at a time (render_texture_rows runs under the texture lock). */
+enum { RING = 3, SEG_WORKERS = 2, RING_BYTES = SEGMENT_BYTES }; /* a segment is at most 64 KiB (rows = 64 KiB / pitch) */
+typedef struct { const uint8_t *src; uint32_t len; uint8_t *dst; uint32_t out; int state; /* 0 free 1 queued 2 taken 3 done */ } SegJob;
+static SegJob seg_jobs[RING];
+static uint8_t seg_ring[RING][RING_BYTES];
+static pthread_mutex_t seg_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t seg_queued = PTHREAD_COND_INITIALIZER, seg_done = PTHREAD_COND_INITIALIZER;
+
+static void *seg_worker(void *arg) {
+    (void)arg;
+    platform_pin_helper("texture inflater");
+    pthread_mutex_lock(&seg_lock);
+    for (;;) {
+        SegJob *j = NULL;
+        for (unsigned k = 0; k < RING && !j; k++)
+            if (seg_jobs[k].state == 1) j = &seg_jobs[k];
+        if (!j) { pthread_cond_wait(&seg_queued, &seg_lock); continue; }
+        j->state = 2;
+        pthread_mutex_unlock(&seg_lock);
+        if (inflate_raw(j->src, j->len, j->dst, j->out)) memset(j->dst, 0, j->out);
+        pthread_mutex_lock(&seg_lock);
+        j->state = 3;
+        pthread_cond_broadcast(&seg_done);
+    }
+    return NULL;
+}
+
+/* 1 if t was sent through sink segment by segment */
+static int rows_parallel(RenderTexture *t, size_t size, void (*sink)(void *, const uint8_t *, uint32_t, uint32_t), void *ctx) {
+    const PackHeader *h = (const PackHeader *)t->data;
+    if (t->raw || !t->data || h->magic != PACK_MAGIC || h->segments < 2) return 0;
+    if ((size_t)h->rows * t->pitch > size || (size_t)h->rows * t->pitch > RING_BYTES) return 0;
+    static int workers; /* 0 not started, 1 running, -1 failed */
+    if (!workers) {
+        workers = 1;
+        for (unsigned k = 0; k < SEG_WORKERS; k++) {
+            pthread_t id;
+            pthread_attr_t attr;
+            pthread_attr_init(&attr);
+            pthread_attr_setstacksize(&attr, 64 * 1024);
+            pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+            if (pthread_create(&id, &attr, seg_worker, NULL)) workers = -1;
+            pthread_attr_destroy(&attr);
+        }
+    }
+    if (workers < 0) return 0;
+    const uint8_t *data = t->data + pack_header_bytes(h->segments);
+    uint32_t segs = h->segments, rows = h->rows, next = 0;
+#define SEG_POST(k) do { SegJob *j_ = &seg_jobs[(k) % RING]; uint32_t y_ = (k) * rows; \
+        j_->src = data + h->offset[k]; j_->len = h->offset[(k) + 1] - h->offset[k]; j_->dst = seg_ring[(k) % RING]; \
+        j_->out = (t->height - y_ < rows ? t->height - y_ : rows) * t->pitch; j_->state = 1; } while (0)
+    pthread_mutex_lock(&seg_lock);
+    for (; next < segs && next < RING; next++) SEG_POST(next);
+    pthread_cond_broadcast(&seg_queued);
+    for (uint32_t k = 0; k < segs; k++) {
+        SegJob *j = &seg_jobs[k % RING];
+        while (j->state != 3) pthread_cond_wait(&seg_done, &seg_lock);
+        pthread_mutex_unlock(&seg_lock);
+        uint32_t y = k * rows;
+        sink(ctx, j->dst, y, t->height - y < rows ? t->height - y : rows);
+        pthread_mutex_lock(&seg_lock);
+        j->state = 0;
+        if (next < segs) { SEG_POST(next); next++; pthread_cond_broadcast(&seg_queued); }
+    }
+    pthread_mutex_unlock(&seg_lock);
+#undef SEG_POST
+    texture_parallel_uploads++;
+    return 1;
+}
+#endif
+
 /* The stored pixels in bands of whole rows through `buf` (any size of at least one
    row): the upload no longer needs the whole texture in one piece, which for a
    1024x1024 texture (4 MiB) failed on the Vita once memory was fragmented. */
@@ -296,13 +420,18 @@ void render_texture_rows(RenderTexture *t, uint8_t *buf, size_t size,
     if (!rows_per) return;
     pthread_mutex_lock(&texture_lock);
 #ifdef T123_PACKED_TEXTURES
+    if (rows_parallel(t, size, sink, ctx)) {
+        pthread_mutex_unlock(&texture_lock);
+        return;
+    }
     z_stream z;
-    int inflating = !t->raw && t->data;
+    const PackHeader *h = (const PackHeader *)t->data;
+    int inflating = !t->raw && t->data && h->magic == PACK_MAGIC;
     if (inflating) {
         memset(&z, 0, sizeof z);
-        z.next_in = t->data;
-        z.avail_in = (uInt)t->stored;
-        inflating = inflateInit(&z) == Z_OK;
+        z.next_in = t->data + pack_header_bytes(h->segments);
+        z.avail_in = (uInt)(t->stored - pack_header_bytes(h->segments));
+        inflating = inflateInit2(&z, -MAX_WBITS) == Z_OK;
     }
 #endif
     for (uint32_t y = 0; y < t->height; y += rows_per) {
@@ -314,8 +443,9 @@ void render_texture_rows(RenderTexture *t, uint8_t *buf, size_t size,
         } else if (inflating) {
             z.next_out = buf;
             z.avail_out = (uInt)bytes;
-            int r = inflate(&z, Z_SYNC_FLUSH);
-            if (z.avail_out && r != Z_OK && r != Z_STREAM_END)
+            int r = Z_OK;
+            while (z.avail_out && r == Z_OK) r = inflate(&z, Z_SYNC_FLUSH);
+            if (z.avail_out)
                 memset(z.next_out, 0, z.avail_out);
         } else {
             memset(buf, 0, bytes);
@@ -425,10 +555,12 @@ API(Clear) {
     render_clear(ARG(c, 3), ARG(c, 4), *(float *)G(c->esp.d + 4 + 4 * 5), ARG(c, 6));
     ret_stdcall(c, S_OK, 7);
 }
+/* T123_DRAWLOG=n logs presented frame n; T123_DRAWLOG_EVERY=k also every k-th frame */
 static int drawlog_active(void) {
-    static long long frame = -2;
+    static long long frame = -2, every = -2;
     if (frame == -2) frame = getenv("T123_DRAWLOG") ? atoll(getenv("T123_DRAWLOG")) : -1;
-    return (long long)d3d_frames == frame;
+    if (every == -2) every = getenv("T123_DRAWLOG_EVERY") ? atoll(getenv("T123_DRAWLOG_EVERY")) : 0;
+    return (long long)d3d_frames == frame || (every > 0 && d3d_frames % every == 0);
 }
 API(SetRenderState) {
     if (drawlog_active()) trace("#   rs %u = %08x", ARG(c, 1), ARG(c, 2));
@@ -469,9 +601,7 @@ API(DrawPrimitiveUP) {
     d3d_draws++;
     /* T123_DRAWLOG=n: every draw of presented frame n, vertices as x,y u,v colour
        (assumes the XYZRHW|DIFFUSE|TEX1 layout for 28-byte strides) */
-    static long long drawlog = -2;
-    if (drawlog == -2) drawlog = getenv("T123_DRAWLOG") ? atoll(getenv("T123_DRAWLOG")) : -1;
-    if ((long long)d3d_frames == drawlog) {
+    if (drawlog_active()) {
         uint32_t type = ARG(c, 1), count = ARG(c, 2), data = ARG(c, 3), stride = ARG(c, 4);
         char line[600];
         const RenderTexture *bound = drawlog_texture ? &textures[com_index(drawlog_texture)] : NULL;
@@ -486,7 +616,7 @@ API(DrawPrimitiveUP) {
                               *(float *)G(p + 12),*(float *)G(p + 20), *(float *)G(p + 24), rd32(p + 16));
             n += snprintf(line + n, sizeof line - n, ")");
         }
-        trace("%s", line);
+        trace("%s [frame %llu]", line, (unsigned long long)d3d_frames);
         if (bound && bound->format == 25 && bound->height <= 512) {
             static uint8_t px[512 * 1024 * 4];
             if ((size_t)bound->pitch * bound->height <= sizeof px) {

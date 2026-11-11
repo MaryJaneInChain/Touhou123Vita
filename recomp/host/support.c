@@ -6,11 +6,72 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <string.h>
+#include <time.h>
 
 /* -- traces ---------------------------------------------------------------------------- */
+/* trace() copies the line into a memory buffer; a writer thread puts it in the file. One
+   fflush cost ~10 ms on the Vita's card, and the game thread used to pay it for every '#'
+   line (each button change, each sound effect played, the per-second frame line): a skipped
+   frame each time, ~17 s of 9 minutes stalled in sound effects and 23 s in button logging.
+   Milestones and errors ('#') still wake the writer at once, so a crash report keeps them;
+   other lines go out within a second; flush.txt in the data directory makes every line wake
+   it (to find where a hang is). Two buffers: the writer writes one outside the lock while
+   the other fills; a full buffer makes trace() wait. trace_close (also at exit) writes the
+   rest synchronously. */
 static FILE *trace_file;
 unsigned long long import_calls;
 char trace_path[256] = "host-trace.log";
+
+enum { TRACE_BUF = 256 * 1024 };
+static char trace_buf[2][TRACE_BUF];
+static size_t trace_len;          /* bytes waiting in trace_buf[trace_cur] */
+static int trace_cur, trace_urgent, trace_writing, trace_writer; /* trace_writer: 0 not started, 1 running, -1 failed */
+static pthread_mutex_t trace_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t trace_wake = PTHREAD_COND_INITIALIZER, trace_done = PTHREAD_COND_INITIALIZER;
+
+static void trace_write_file(const char *p, size_t n) { /* by whoever set trace_writing */
+    if (!trace_file) {
+        static int reopened; /* a line written after trace_close (a thread at exit) appends instead of wiping the log */
+        trace_file = fopen(trace_path, reopened++ ? "a" : "w");
+    }
+    if (trace_file) {
+        fwrite(p, 1, n, trace_file);
+        fflush(trace_file);
+    }
+}
+
+static size_t trace_take(const char **p) { /* under trace_lock: hands out the filled buffer */
+    *p = trace_buf[trace_cur];
+    size_t n = trace_len;
+    trace_cur ^= 1;
+    trace_len = 0;
+    trace_urgent = 0;
+    trace_writing = 1;
+    return n;
+}
+
+static void *trace_writer_main(void *arg) {
+    (void)arg;
+    platform_pin_helper("trace writer");
+    pthread_mutex_lock(&trace_lock);
+    for (;;) {
+        while (trace_writing || !trace_len || (!trace_urgent && trace_len < TRACE_BUF / 2)) {
+            struct timespec until;
+            clock_gettime(CLOCK_REALTIME, &until);
+            until.tv_sec += 1;
+            if (pthread_cond_timedwait(&trace_wake, &trace_lock, &until) && trace_len && !trace_writing)
+                break; /* a second went by: write what is there */
+        }
+        const char *p;
+        size_t n = trace_take(&p);
+        pthread_mutex_unlock(&trace_lock);
+        trace_write_file(p, n);
+        pthread_mutex_lock(&trace_lock);
+        trace_writing = 0;
+        pthread_cond_broadcast(&trace_done);
+    }
+    return NULL;
+}
 
 void trace(const char *fmt, ...) {
     char line[1024];
@@ -18,45 +79,66 @@ void trace(const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(line, sizeof line, fmt, ap);
     va_end(ap);
-    static pthread_mutex_t trace_lock = PTHREAD_MUTEX_INITIALIZER;
+    size_t len = strlen(line);
     pthread_mutex_lock(&trace_lock);
-    if (!trace_file) {
-        trace_file = fopen(trace_path, "w");
-        if (trace_file)
-            setvbuf(trace_file, NULL, _IOFBF, 64 * 1024);
+    static int every = -1; /* flush.txt */
+    if (every < 0) {
+        char p[300];
+        snprintf(p, sizeof p, "%.*s", (int)(strrchr(trace_path, '/') ? strrchr(trace_path, '/') - trace_path + 1 : 0), trace_path);
+        strncat(p, "flush.txt", sizeof p - strlen(p) - 1);
+        FILE *t = fopen(p, "rb");
+        every = t != NULL;
+        if (t) fclose(t);
     }
-    if (trace_file) {
-        fputs(line, trace_file);
-        fputc('\n', trace_file);
-        /* Flushing every line cost ~10 ms per line on the Vita's card (8.7 s of
-           CreateFileA alone). Milestones and errors ('#') still go out at once, so a
-           crash report keeps them; plain call lines go out at least once a second. */
-        static uint64_t last_flush;
-        uint64_t now = platform_ticks_us();
-        /* flush.txt in the data directory: every line goes out at once (to find where a hang is) */
-        static int every = -1;
-        if (every < 0) {
-            char p[300];
-            snprintf(p, sizeof p, "%.*s", (int)(strrchr(trace_path, '/') ? strrchr(trace_path, '/') - trace_path + 1 : 0), trace_path);
-            strncat(p, "flush.txt", sizeof p - strlen(p) - 1);
-            FILE *t = fopen(p, "rb");
-            every = t != NULL;
-            if (t) fclose(t);
+    if (!trace_writer) {
+        pthread_t id;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 32 * 1024);
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        trace_writer = pthread_create(&id, &attr, trace_writer_main, NULL) ? -1 : 1;
+        pthread_attr_destroy(&attr);
+        atexit(trace_close);
+    }
+    while (trace_len + len + 1 > TRACE_BUF) { /* full */
+        if (trace_writer < 0 && !trace_writing) { /* no writer thread: write here */
+            const char *p;
+            size_t n = trace_take(&p);
+            trace_write_file(p, n);
+            trace_writing = 0;
+            continue;
         }
-        if (every || line[0] == '#' || now - last_flush > 1000000u) {
-            fflush(trace_file);
-            last_flush = now;
-        }
+        trace_urgent = 1;
+        pthread_cond_signal(&trace_wake);
+        pthread_cond_wait(&trace_done, &trace_lock);
+    }
+    memcpy(trace_buf[trace_cur] + trace_len, line, len);
+    trace_len += len;
+    trace_buf[trace_cur][trace_len++] = '\n';
+    if (every || line[0] == '#') {
+        trace_urgent = 1;
+        if (trace_writer > 0) pthread_cond_signal(&trace_wake);
+        else if (!trace_writing) { const char *p; size_t n = trace_take(&p); trace_write_file(p, n); trace_writing = 0; }
     }
     platform_log(line);
     pthread_mutex_unlock(&trace_lock);
 }
 
 void trace_close(void) {
+    pthread_mutex_lock(&trace_lock);
+    while (trace_writing)
+        pthread_cond_wait(&trace_done, &trace_lock);
+    if (trace_len) {
+        const char *p;
+        size_t n = trace_take(&p);
+        trace_write_file(p, n);
+        trace_writing = 0;
+    }
     if (trace_file) {
         fclose(trace_file);
         trace_file = NULL;
     }
+    pthread_mutex_unlock(&trace_lock);
 }
 
 /* -- guest heap -------------------------------------------------------------------------

@@ -35,7 +35,7 @@ static LONG WINAPI guest_access_violation(EXCEPTION_POINTERS *info) {
             trace("#   %08x", f);
     }
     trace_summary();
-    fflush(NULL);
+    trace_close(); /* the trace is written by a thread: drain it before the process goes */
     ExitProcess(0xFA17);
 }
 #endif
@@ -126,6 +126,7 @@ int main(int argc, char **argv) {
     snprintf(trace_path, sizeof trace_path, "%s/recomp-trace.log", host_data_dir);
 #endif
     trace("# th123 recompiled host, image %s", exe);
+    platform_pin_helper("main");
     char memory[160];
     platform_memory_report(memory, sizeof memory);
     trace("# before the guest window: %s", memory);

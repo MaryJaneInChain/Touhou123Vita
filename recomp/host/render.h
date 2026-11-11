@@ -25,6 +25,7 @@ typedef struct {
     uint8_t gpu16;                /* uploaded as RGBA4444 (half the GPU memory) */
 } RenderTexture;
 
+extern unsigned long long texture_parallel_uploads; /* d3d9.c: uploads inflated by worker threads */
 int render_init(uint32_t width, uint32_t height);
 void render_clear(uint32_t flags, uint32_t color, float z, uint32_t stencil);
 void render_state(uint32_t state, uint32_t value);

@@ -223,16 +223,27 @@ API(GetExitCodeThread) { wr32(ARG(c, 1), 259 /* STILL_ACTIVE */); ret_stdcall(c,
 API(CloseHandle) { handle_close(ARG(c, 0)); ret_stdcall(c, 1, 1); }
 
 /* -- code pages: the game runs under code page 932 (Shift-JIS) ------------------------ */
-API(GetACP) { ret_stdcall(c, 932, 0); }
-API(GetOEMCP) { ret_stdcall(c, 932, 0); }
+/* T123_GBK: the Chinese (汉化) data is GBK, so the system looks like a Chinese one (936)
+   instead; the game's CRT takes its multibyte lead-byte ranges from GetACP/GetCPInfo. */
+#ifdef T123_GBK
+#define ANSI_CP 936
+#else
+#define ANSI_CP 932
+#endif
+API(GetACP) { ret_stdcall(c, ANSI_CP, 0); }
+API(GetOEMCP) { ret_stdcall(c, ANSI_CP, 0); }
 API(IsValidCodePage) { ret_stdcall(c, 1, 1); }
 API(GetCPInfo) {
     uint32_t p = ARG(c, 1);
     memset(G(p), 0, 20);
-    if (ARG(c, 0) == 932 || ARG(c, 0) == 0) {
+    if (ARG(c, 0) == ANSI_CP || ARG(c, 0) == 0) {
         wr32(p, 2);              /* MaxCharSize */
         wr8(p + 4, '?');         /* DefaultChar */
+#ifdef T123_GBK
+        const uint8_t lead[] = {0x81, 0xFE, 0, 0};
+#else
         const uint8_t lead[] = {0x81, 0x9F, 0xE0, 0xFC};
+#endif
         memcpy(G(p + 6), lead, 4);
     } else {
         wr32(p, 1);
@@ -240,14 +251,18 @@ API(GetCPInfo) {
     }
     ret_stdcall(c, 1, 2);
 }
+#ifdef T123_GBK
+API(GetUserDefaultLCID) { ret_stdcall(c, 0x0804 /* zh-CN */, 0); }
+#else
 API(GetUserDefaultLCID) { ret_stdcall(c, 0x0411 /* ja-JP */, 0); }
+#endif
 
 /* The game runs on a Japanese system: CP_ACP, CP_OEMCP, CP_THREAD_ACP and 932 are
    all Shift-JIS (sjis.c, Codex T7, validated against Windows). Other code pages are
    reported once and converted the same way. */
 static int is_cp932(uint32_t cp) {
     static int reported;
-    if (cp == 0 || cp == 1 || cp == 3 || cp == 932)
+    if (cp == 0 || cp == 1 || cp == 3 || cp == ANSI_CP)
         return 1;
     if (!reported++)
         trace("# code page %u converted as CP932", cp);
@@ -348,6 +363,13 @@ static int rf_open(const char *path) { int fd = sceIoOpen(path, SCE_O_RDONLY, 0)
 static void rf_close(int fd) { sceIoClose(fd); }
 static int64_t rf_size(int fd) { return sceIoLseek(fd, 0, SCE_SEEK_END); }
 static int32_t rf_read_at(int fd, void *dst, uint32_t n, int64_t off) { return sceIoPread(fd, dst, n, off); }
+#elif !defined(_WIN32)
+#include <fcntl.h>
+#include <unistd.h>
+static int rf_open(const char *path) { return open(path, O_RDONLY); }
+static void rf_close(int fd) { close(fd); }
+static int64_t rf_size(int fd) { return lseek(fd, 0, SEEK_END); }
+static int32_t rf_read_at(int fd, void *dst, uint32_t n, int64_t off) { return (int32_t)pread(fd, dst, n, off); }
 #else
 #include <fcntl.h>
 #include <io.h>
@@ -775,8 +797,8 @@ API(GetPrivateProfileStringA) {
 }
 
 /* -- console (CRT error output only) ------------------------------------------------- */
-API(GetConsoleCP) { ret_stdcall(c, 932, 0); }
-API(GetConsoleOutputCP) { ret_stdcall(c, 932, 0); }
+API(GetConsoleCP) { ret_stdcall(c, ANSI_CP, 0); }
+API(GetConsoleOutputCP) { ret_stdcall(c, ANSI_CP, 0); }
 API(GetConsoleMode) { ret_stdcall(c, 0, 2); }
 
 /* -- exceptions: C++ throw/unwind are not supported yet -------------------------------- */

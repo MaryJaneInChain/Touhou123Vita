@@ -12,6 +12,7 @@ enum { OUT_RATE = 48000, PERIOD = 1024 };
 
 static void *audio_thread(void *arg) {
     int port = (int)(intptr_t)arg;
+    platform_pin_helper("audio");
     static int16_t mix[2][PERIOD * 2];
     /* above the game's threads (threads.c maps TIME_CRITICAL to 120): a late period
        is an audible gap */
@@ -59,6 +60,7 @@ static void *audio_thread(void *arg) {
    game's music refill, which follows them, keeps running */
 static void *silent_thread(void *arg) {
     (void)arg;
+    platform_pin_helper("audio clock");
     uint64_t next = platform_ticks_us();
     for (;;) {
         audio_advance(PERIOD, OUT_RATE);

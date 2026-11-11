@@ -202,15 +202,10 @@ static void *thread_main(void *arg) {
     /* The on-Vita profile (v9) showed the game thread (0x4083d0, logic + drawing) idle
        30-50 % of a fight in its frame wait, yet with 25-34 ms steps: it was being delayed,
        not overloaded. It gets user core 1 to itself; every other guest thread runs on
-       cores 0 and 2. Measured in v10: no better, so it is now opt-in with cores.txt. */
+       cores 0 and 2. Measured in v10: no better (the host's own threads still ran on core 1
+       then), so it is opt-in with cores.txt. */
     {
-        static int off = -1;
-        if (off < 0) {
-            FILE *f = fopen("ux0:data/touhou123vita/cores.txt", "rb");
-            off = f == NULL;
-            if (f) fclose(f);
-        }
-        if (!off) {
+        if (platform_split_cores()) { /* the host's helpers and the main thread: platform_pin_helper */
             int game = t->start == 0x004083d0u;
             int mask = game ? 0x20000 : 0x10000 | 0x40000; /* SCE_KERNEL_CPU_MASK_USER_1 / _0|_2 */
             int r = sceKernelChangeThreadCpuAffinityMask(t->uid, mask);

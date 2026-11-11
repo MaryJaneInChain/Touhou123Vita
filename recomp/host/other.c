@@ -237,7 +237,11 @@ static int glyphs_ready(void) {
     static int state; /* 0 untried, 1 ok, -1 failed */
     if (state) return state > 0;
     char path[1200];
+#ifdef T123_GBK
+    const char *name = "NotoSansMonoCJKsc-Regular.otf", *env = getenv("T123_FONT"); /* simplified Chinese forms */
+#else
     const char *name = "NotoSansMonoCJKjp-Regular.otf", *env = getenv("T123_FONT");
+#endif
     const char *candidates[4] = {env, "%s/%s", "%s/../local/fonts/%s", "app0:assets/%s"}; /* last: the VPK's copy */
     state = -1;
     for (unsigned k = 0; k < 4 && state < 0; k++) {
@@ -304,7 +308,11 @@ API(GetTextMetricsA) {
     wr32(tm + 24, (uint32_t)(cell * 1000 / 1448));
     wr32(tm + 28, (uint32_t)weight);
     wr8(tm + 45, 0x20); wr8(tm + 46, 0xFC); wr8(tm + 47, 0x3F); wr8(tm + 48, 0x20); /* first/last/default/break */
+#ifdef T123_GBK
+    wr8(tm + 52, 134);                                           /* GB2312_CHARSET */
+#else
     wr8(tm + 52, 128);                                           /* SHIFTJIS_CHARSET */
+#endif
     ret_stdcall(c, 1, 2);
 }
 API(GetGlyphOutlineA) {
@@ -315,7 +323,7 @@ API(GetGlyphOutlineA) {
         ret_stdcall(c, 0xFFFFFFFFu /* GDI_ERROR */, 7);
         return;
     }
-    /* the A version takes the Shift-JIS code, lead byte in bits 8-15 */
+    /* the A version takes the ANSI code page's code (Shift-JIS, or GBK with T123_GBK), lead byte in bits 8-15 */
     uint8_t mb[2];
     int n = 0;
     if (ch > 0xFF) mb[n++] = (uint8_t)(ch >> 8);

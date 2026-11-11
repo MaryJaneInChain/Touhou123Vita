@@ -2,6 +2,7 @@
  * every registered guest thread about once a millisecond and records where it is
  * running. profile.txt lists "thread host-address count"; tools map the addresses to
  * the generated functions (f_00xxxxxx = the game function at that address). */
+#ifdef _WIN32
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -73,3 +74,10 @@ void profile_write(void) {
             fprintf(f, "%08x %016llx %u\n", samples[k].thread, (unsigned long long)samples[k].rip, samples[k].count);
     fclose(f);
 }
+#else
+/* Linux PC build: no sampling profiler */
+#include <stdint.h>
+void profile_register_thread(uint32_t guest_id) { (void)guest_id; }
+void profile_start(void) {}
+void profile_write(void) {}
+#endif
