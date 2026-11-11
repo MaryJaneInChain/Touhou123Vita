@@ -83,8 +83,9 @@ git clone https://github.com/MaryJaneInChain/Touhou123Vita.git
 cd Touhou123Vita
 mkdir -p original && cp 原版1.10a的th123.exe original/th123.exe
 python3 -m venv local/venv
-local/venv/bin/pip install capstone
+local/venv/bin/pip install capstone pefile pillow
 local/venv/bin/python tools/fetch_font.py --sc
+local/venv/bin/python tools/font.py assets
 local/venv/bin/python recomp/discover.py
 local/venv/bin/python recomp/lift_all.py --gbk --wide
 podman run --rm -v "$PWD":/src -w /src docker.io/vitasdk/vitasdk:2026.08 \
@@ -92,6 +93,7 @@ podman run --rm -v "$PWD":/src -w /src docker.io/vitasdk/vitasdk:2026.08 \
 ```
 
  - `fetch_font.py --sc` 从 Noto CJK 官方仓库下载简体中文字体（SIL OFL），校验 SHA-256 后放到 `local/fonts/`，编译时会和许可证一起打进 VPK。
+ - `font.py assets` 生成启动时屏幕日志用的小位图字体。它要用 Pillow，而 VitaSDK 容器里没有，所以要先在本机生成好。
  - `lift_all.py` 把 exe 翻译成 C（`--gbk` 打上汉化版需要的那处字形补丁，`--wide` 打上宽屏的镜头和背景补丁），生成的 C 放在 `artifacts/`，不进 git。
  - 第一次编译要十几分钟，之后只改了宿主代码的话几秒就好。
  - VPK 生成在 `artifacts/recomp/f0db93660ceb8635a1921e0ba4686fcfbd5c492311dee6ef7061b7bada16731e/vita/T123Recomp-gbk-wide.vpk`。LiveArea 用的是自动生成的占位图。
