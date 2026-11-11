@@ -6,6 +6,28 @@
 
 ![PS Vita control map / Mapa de controles de PS Vita](docs/img/psvita-controls.png)
 
+## Este fork / This fork
+
+**Español.** Fork de [Botarguirix/Touhou123Vita](https://github.com/Botarguirix/Touhou123Vita) con estos cambios:
+
+- Datos en chino (la traducción 汉化, codificada en GBK): página de códigos 936, la fuente Noto Sans Mono CJK SC y `tools/make_zh_exe.py`, que lleva los textos de interfaz traducidos al EXE 1.10a.
+- Pantalla panorámica real a 960x544: el campo de visión del juego se amplía (no se estira) y se recolocan los elementos de cada pantalla (título, selección, HUD de combate, pausa, resultados, submenús del título, pantallas de carga...). Con `4x3.txt` en la carpeta de datos se vuelve al 4:3.
+- Corregido el ruido de la música: la decodificación Vorbis heredaba el modo de redondeo que dejaba el juego.
+- Más fluidez: los combates pasan de unos 43 a unos 56 FPS (más memoria para vitaGL, trazas escritas en segundo plano, agrupación de dibujos, descompresión de texturas en paralelo) y hay menos bandas de color en los fondos.
+- El host de PC se compila en Linux.
+
+Este fork **no publica VPK** (el repositorio original no tiene licencia); el enlace «Download VPK» de arriba es el del port original, sin estos cambios. Para compilarlo, sigue los pasos de [README.zh-CN.md](README.zh-CN.md): los comandos sirven tal cual. Con datos japoneses, quita `--gbk` y ejecuta `tools/fetch_font.py` sin `--sc` (esa combinación no se ha probado en consola).
+
+**English.** Fork of [Botarguirix/Touhou123Vita](https://github.com/Botarguirix/Touhou123Vita) with these changes:
+
+- Chinese data (the 汉化 translation, encoded in GBK): code page 936, the Noto Sans Mono CJK SC font and `tools/make_zh_exe.py`, which carries the translated UI strings into the 1.10a EXE.
+- Real 960x544 widescreen: the in-game view is widened (not stretched) and each screen's elements are laid out again (title, select screens, fight HUD, pause, results, the title's sub-menus, loading screens...). `4x3.txt` in the data folder brings back 4:3.
+- The music noise is fixed: Vorbis decoding inherited the rounding mode the game left behind.
+- Smoother: fights go from about 43 to about 56 FPS (more memory for vitaGL, traces written in the background, draw batching, parallel texture inflation), with less colour banding in backgrounds.
+- The PC host builds on Linux.
+
+This fork **publishes no VPK** (the original repository has no license); the "Download VPK" link above is the original port's release, without these changes. To build it, follow the steps in [README.zh-CN.md](README.zh-CN.md): the commands work as they are. With Japanese data, drop `--gbk` and run `tools/fetch_font.py` without `--sc` (that combination is untested on hardware).
+
 ## Español
 
 ### Aviso contra la piratería
