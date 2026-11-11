@@ -303,6 +303,8 @@ static void layout_title(const RenderTexture *t, float *pos, uint32_t n) {
     }
 }
 enum { SCENE_LOGO = 0, SCENE_SELECT_SCENARIO = 16 };
+/* the loading screens (6; netplay 10-12): one 640x480 picture with "Now praying" at its bottom right */
+static int scene_is_loading(uint32_t scene) { return scene == 6 || (scene >= 10 && scene <= 12); }
 /* a layout rule may ask for the draw to be repeated, shifted by these x offsets (e.g. to tile a
    background wider than the game ever drew it) */
 static float layout_copy_dx[2];
@@ -404,11 +406,13 @@ static void layout_stage(const RenderTexture *t, float *pos, uint32_t n) {
         place(pos, n, 1.5f, 320, 480, 320, 512);
 }
 /* After a pick, the character's battle sprite (16-bit format 25, a size per character and frame)
-   drops into the left of its half with its aura (128x128) and arrow icon (160x32), and the "Color
-   Select" (12x95, from behind the row) and "Deck Select" (91x12, from off the left edge) labels come
-   in next to it. The group moves right by VS_SPRITE_DX, into the space between the banner portrait's
-   figure and the 1P/2P letters, and with its half (the 2P one 16 less far down, clear of the help
-   strip); the labels by how far in they are, so a parked one stays hidden. */
+   drops 192 rows into the left of its half (the 2P one rises) with its aura (128x128) and arrow icon
+   (160x32), while the "Color Select" (12x95, rising from behind the row) and "Deck Select" (91x12,
+   sliding in from off the left edge) labels come in next to it, on the same timing. The group moves
+   right by VS_SPRITE_DX, into the space between the banner portrait's figure and the 1P/2P letters,
+   and with its half (the 2P one 16 less far down, clear of the help strip). The labels are put at
+   their place next to the sprite and come in with it instead: their progress gives the sprite's
+   remaining drop, so a parked label sits 192 rows off the screen. */
 enum { VS_SPRITE_DX = 380, VS_SPRITE_DY2 = 16 };
 static void layout_select(const RenderTexture *t, float *pos, uint32_t n) {
     if (TEX_IS(t, 480, 480)) stage_panel = 1;
@@ -424,16 +428,24 @@ static void layout_select(const RenderTexture *t, float *pos, uint32_t n) {
         place(pos, n, 1, 0, 0, VS_SPRITE_DX, group_dy);
         return;
     }
-    if (TEX_IS(t, 12, 95)) { /* "Color Select": parked behind the row at y 199..294, shown 144 up / 128 down */
-        float p = cy < 246.5f ? (246.5f - cy) / 144 : (cy - 246.5f) / 128;
-        p = p < 0 ? 0 : p > 1 ? 1 : p;
-        place(pos, n, 1, 0, 0, VS_SPRITE_DX * p, (cy < 246.5f ? -32 : VS_SPRITE_DY2) * p);
-        return;
-    }
-    if (TEX_IS(t, 91, 12)) { /* "Deck Select": parked at x -224 (pushed 160 further, off the screen), shown at 32 */
-        float p = (x0 + 224) / 256;
-        p = p < 0 ? 0 : p > 1 ? 1 : p;
-        place(pos, n, 1, 0, 0, -160 + (VS_SPRITE_DX + 160) * p, group_dy);
+    if (TEX_IS(t, 12, 95) || TEX_IS(t, 91, 12)) {
+        int mine_top;    /* 1P's label (top half) */
+        float p, to_x, to_y; /* how far in, and the move to its shown place */
+        if (TEX_IS(t, 12, 95)) { /* "Color Select": parked behind the row at y 199..294, shown 144 up / 128 down */
+            mine_top = cy < 246.5f;
+            p = mine_top ? (246.5f - cy) / 144 : (cy - 246.5f) / 128;
+            p = p < 0 ? 0 : p > 1 ? 1 : p;
+            to_x = 0;
+            to_y = mine_top ? -(1 - p) * 144 : (1 - p) * 128;
+        } else { /* "Deck Select": parked at x -224, shown at 32 */
+            mine_top = top;
+            p = (x0 + 224) / 256;
+            p = p < 0 ? 0 : p > 1 ? 1 : p;
+            to_x = (1 - p) * 256;
+            to_y = 0;
+        }
+        float drop = (1 - p) * 192 * (mine_top ? -1 : 1);
+        place(pos, n, 1, 0, 0, to_x + VS_SPRITE_DX, to_y + (mine_top ? -32 : VS_SPRITE_DY2) + drop);
         return;
     }
     if (TEX_IS(t, 640, 16))                                          /* header / help strip */
@@ -549,7 +561,8 @@ static void layout_panel(const RenderTexture *t, float *pos, uint32_t n, int fig
 static int scene_is_fight(uint32_t scene) { return scene == 5 || (scene >= 13 && scene <= 15); }
 /* scenes laid out for the whole screen; the others stay clipped to their 640x480 */
 static int scene_is_wide(uint32_t scene) {
-    return scene_is_fight(scene) || scene == SCENE_LOGO || scene == SCENE_TITLE || scene == SCENE_SELECT_SCENARIO ||
+    return scene_is_fight(scene) || scene == SCENE_LOGO || scene_is_loading(scene) || scene == SCENE_TITLE ||
+           scene == SCENE_SELECT_SCENARIO ||
            scene == SCENE_SELECT || scene == SCENE_SELECT_SERVER || scene == SCENE_SELECT_CLIENT;
 }
 
@@ -1223,6 +1236,9 @@ void render_draw_up(uint32_t type, uint32_t count, uint32_t data, uint32_t strid
         }
         else if (scene == SCENE_LOGO && tex != 0xFFFFFFFFu && TEX_IS(bound, 640, 480))
             place(pos, n, 1.5f, 320, 240, 320, 240); /* "Touhou Project" splash: the full width, cropped top and bottom */
+        else if (scene_is_loading(scene) && tex != 0xFFFFFFFFu && bound)
+            place(pos, n, 1.5f, 320, 480, 320, 512); /* x1.5 on the bottom edge: the "Now praying" text in its bottom
+                                                        right and its two little gears stay on screen, the top is cut */
         else if (scene == SCENE_TITLE) {
             const RenderTexture *b = tex != 0xFFFFFFFFu ? bound : NULL;
             if (TEX_IS(b, 480, 480)) pause_panel = 1;
