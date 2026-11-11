@@ -2,7 +2,7 @@
 **ULTRA IA VIBECODED!**
 **Touhou 12.3: Hisoutensoku for PS Vita / para PS Vita** · Static recompilation / Recompilación estática (x86 → C → ARM).
 
-[Español](#español) · [English](#english) · [简体中文（汉化 + 宽屏 fork）](README.zh-CN.md) · [Download VPK / Descargar VPK](https://github.com/Botarguirix/Touhou123Vita/releases/tag/v0.1.1-alpha)
+[Español](#español) · [English](#english) · [简体中文（汉化 + 宽屏 fork）](README.zh-CN.md)
 
 ![PS Vita control map / Mapa de controles de PS Vita](docs/img/psvita-controls.png)
 
@@ -16,17 +16,18 @@
 - Más fluidez: los combates pasan de unos 43 a unos 56 FPS (más memoria para vitaGL, trazas escritas en segundo plano, agrupación de dibujos, descompresión de texturas en paralelo) y hay menos bandas de color en los fondos.
 - El host de PC se compila en Linux.
 
-Este fork **no publica VPK** (el repositorio original no tiene licencia); el enlace «Download VPK» de arriba es el del port original, sin estos cambios. Para compilarlo, sigue los pasos de [README.zh-CN.md](README.zh-CN.md): los comandos sirven tal cual. Con datos japoneses, quita `--gbk` y ejecuta `tools/fetch_font.py` sin `--sc` (esa combinación no se ha probado en consola).
+Este fork **no publica VPK** (el repositorio original no tiene licencia); el texto de más abajo es el del port original y su VPK no incluye estos cambios. Para compilarlo, sigue los pasos de [README.zh-CN.md](README.zh-CN.md): los comandos sirven tal cual. Con datos japoneses, quita `--gbk` y ejecuta `tools/fetch_font.py` sin `--sc` (esa combinación no se ha probado en consola).
 
 **English.** Fork of [Botarguirix/Touhou123Vita](https://github.com/Botarguirix/Touhou123Vita) with these changes:
 
 - Chinese data (the 汉化 translation, encoded in GBK): code page 936, the Noto Sans Mono CJK SC font and `tools/make_zh_exe.py`, which carries the translated UI strings into the 1.10a EXE.
-- Real 960x544 widescreen: the in-game view is widened (not stretched) and each screen's elements are laid out again (title, select screens, fight HUD, pause, results, the title's sub-menus, loading screens...). `4x3.txt` in the data folder brings back 4:3.
+- Real 960x544 widescreen: the in-game view is widened (not stretched) and each screen's elements are laid out again (title, select screens, fight HUD, pause, results, the title's sub-menus, loading screens...). `4x3.txt` in the data folder brings back 4:3.<br>
+  <img src="docs/img/widescreen-title.png" alt="Title menu at 960x544" width="49%"> <img src="docs/img/widescreen-fight.png" alt="Fight at 960x544" width="49%">
 - The music noise is fixed: Vorbis decoding inherited the rounding mode the game left behind.
 - Smoother: fights go from about 43 to about 56 FPS (more memory for vitaGL, traces written in the background, draw batching, parallel texture inflation), with less colour banding in backgrounds.
 - The PC host builds on Linux.
 
-This fork **publishes no VPK** (the original repository has no license); the "Download VPK" link above is the original port's release, without these changes. To build it, follow the steps in [README.zh-CN.md](README.zh-CN.md): the commands work as they are. With Japanese data, drop `--gbk` and run `tools/fetch_font.py` without `--sc` (that combination is untested on hardware).
+This fork **publishes no VPK** (the original repository has no license); the text further down is the original port's, and its VPK does not include these changes. To build it, follow the steps in [README.zh-CN.md](README.zh-CN.md): the commands work as they are. With Japanese data, drop `--gbk` and run `tools/fetch_font.py` without `--sc` (that combination is untested on hardware).
 
 ## Español
 
