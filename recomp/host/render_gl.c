@@ -499,6 +499,12 @@ static void layout_hud(const RenderTexture *t, float *pos, uint32_t n) {
         place(pos, n, 1, 0, 0, cx < 320 ? -160 : 160, -32);
         return;
     }
+    /* system notices that slide in at mid-height from the 1P or 2P side ("Chain Spell":
+       data/battle/chainSpell(R).cv2, 57x12, and its 12-pixel-high siblings): to their side's edge */
+    if (t && t->height == 12 && t->width <= 100 && cy > 200 && cy < 245) {
+        place(pos, n, 1, 0, 0, cx < 320 ? -160 : 160, 0);
+        return;
+    }
     /* the hit labels listed under the counter ("Smash Attack", "Counter Hit", "Rift Attack":
        10-pixel-high text, one per line) go with it */
     if (t && t->height == 10 && y1 - y0 <= 12 && cy > 175 && cy < 245 && (x0 >= 480 || x1 <= 160)) {
