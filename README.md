@@ -6,6 +6,8 @@
 
 ![PS Vita control map / Mapa de controles de PS Vita](docs/img/psvita-controls.png)
 
+<img src="docs/img/widescreen-title.png" alt="Title menu at 960x544 / Menú de título a 960x544" width="49%"> <img src="docs/img/widescreen-fight.png" alt="Fight at 960x544 / Combate a 960x544" width="49%">
+
 ## Este fork / This fork
 
 **Español.** Fork de [Botarguirix/Touhou123Vita](https://github.com/Botarguirix/Touhou123Vita) con estos cambios:
@@ -21,8 +23,7 @@ Este fork **no publica VPK** (el repositorio original no tiene licencia); el tex
 **English.** Fork of [Botarguirix/Touhou123Vita](https://github.com/Botarguirix/Touhou123Vita) with these changes:
 
 - Chinese data (the 汉化 translation, encoded in GBK): code page 936, the Noto Sans Mono CJK SC font and `tools/make_zh_exe.py`, which carries the translated UI strings into the 1.10a EXE.
-- Real 960x544 widescreen: the in-game view is widened (not stretched) and each screen's elements are laid out again (title, select screens, fight HUD, pause, results, the title's sub-menus, loading screens...). `4x3.txt` in the data folder brings back 4:3.<br>
-  <img src="docs/img/widescreen-title.png" alt="Title menu at 960x544" width="49%"> <img src="docs/img/widescreen-fight.png" alt="Fight at 960x544" width="49%">
+- Real 960x544 widescreen: the in-game view is widened (not stretched) and each screen's elements are laid out again (title, select screens, fight HUD, pause, results, the title's sub-menus, loading screens...). `4x3.txt` in the data folder brings back 4:3.
 - The music noise is fixed: Vorbis decoding inherited the rounding mode the game left behind.
 - Smoother: fights go from about 43 to about 56 FPS (more memory for vitaGL, traces written in the background, draw batching, parallel texture inflation), with less colour banding in backgrounds.
 - The PC host builds on Linux.
